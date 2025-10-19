@@ -1,0 +1,85 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Vehicle {
+  id                 String    @id @default(uuid())
+  type               String
+  registrationNumber String    @unique
+  weight             Float
+  length             Float
+  width              Float
+  height             Float
+  status             VehicleStatus @default(available)
+  baseRatePerKm      Float
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+  bookings           Booking[]
+
+  @@index([status])
+  @@index([registrationNumber])
+}
+
+model Customer {
+  id            String    @id @default(uuid())
+  name          String
+  contactNumber String
+  email         String    @unique
+  address       String
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  bookings      Booking[]
+
+  @@index([email])
+}
+
+model Booking {
+  id              String        @id @default(uuid())
+  customerId      String
+  vehicleId       String
+  pickupAddress   String
+  deliveryAddress String
+  pickupDateTime  DateTime
+  weight          Float
+  length          Float
+  width           Float
+  height          Float
+  description     String
+  status          BookingStatus @default(pending)
+  distanceKm      Float
+  totalPrice      Float
+  statusHistory   Json
+  s3LayoutKey     String?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+  
+  customer        Customer      @relation(fields: [customerId], references: [id])
+  vehicle         Vehicle       @relation(fields: [vehicleId], references: [id])
+
+  @@index([customerId])
+  @@index([vehicleId])
+  @@index([status])
+  @@index([pickupDateTime])
+  @@index([vehicleId, pickupDateTime])
+}
+
+enum VehicleStatus {
+  available
+  booked
+  in_transit
+  maintenance
+}
+
+enum BookingStatus {
+  pending
+  confirmed
+  picked_up
+  in_transit
+  delivered
+  cancelled
+}

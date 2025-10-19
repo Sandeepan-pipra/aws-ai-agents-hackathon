@@ -1,0 +1,108 @@
+{
+  "container": {
+    "size": {
+      "length": 1500,
+      "height": 1200,
+      "width": 1200
+    },
+    "position": {
+      "x": 0,
+      "y": 600.0,
+      "z": 0
+    },
+    "maxWeight": 500,
+    "color": "#95a5a6"
+  },
+  "packages": [
+    {
+      "id": "electronics-1",
+      "position": {
+        "x": -750.0,
+        "y": 0.0,
+        "z": -600.0
+      },
+      "size": {
+        "length": 600,
+        "height": 400,
+        "width": 600
+      },
+      "weight": 0,
+      "color": "#c0392b",
+      "label": "Electronics",
+      "placementOrder": 1,
+      "fragile": false
+    },
+    {
+      "id": "textiles-1",
+      "position": {
+        "x": -150.0,
+        "y": 0.0,
+        "z": -600.0
+      },
+      "size": {
+        "length": 600,
+        "height": 400,
+        "width": 600
+      },
+      "weight": 0,
+      "color": "#2980b9",
+      "label": "Textiles",
+      "placementOrder": 2,
+      "fragile": false
+    },
+    {
+      "id": "food-items-1",
+      "position": {
+        "x": -750.0,
+        "y": 400.0,
+        "z": -600.0
+      },
+      "size": {
+        "length": 600,
+        "height": 400,
+        "width": 600
+      },
+      "weight": 0,
+      "color": "#27ae60",
+      "label": "Food Items",
+      "placementOrder": 3,
+      "fragile": false
+    },
+    {
+      "id": "documents-1",
+      "position": {
+        "x": -150.0,
+        "y": 400.0,
+        "z": -600.0
+      },
+      "size": {
+        "length": 300,
+        "height": 200,
+        "width": 300
+      },
+      "weight": 0,
+      "color": "#d68910",
+      "label": "Documents",
+      "placementOrder": 4,
+      "fragile": false
+    },
+    {
+      "id": "fragile-1",
+      "position": {
+        "x": -750.0,
+        "y": 800.0,
+        "z": -600.0
+      },
+      "size": {
+        "length": 300,
+        "height": 200,
+        "width": 300
+      },
+      "weight": 0,
+      "color": "#8e44ad",
+      "label": "Fragile",
+      "placementOrder": 5,
+      "fragile": true
+    }
+  ]
+}

@@ -1,0 +1,9 @@
+{
+  "name": "logistics-agent-trigger",
+  "version": "1.0.0",
+  "description": "Lambda function to trigger Bedrock agents from UI",
+  "main": "index.js",
+  "dependencies": {
+    "@aws-sdk/client-bedrock-agentcore": "^3.700.0"
+  }
+}

@@ -1,0 +1,20 @@
+# Core dependencies for local testing (no strands needed)
+boto3>=1.34.0
+requests>=2.31.0
+
+# Order API dependencies
+fastapi>=0.104.1
+uvicorn[standard]>=0.24.0
+sqlalchemy>=2.0.23
+pydantic>=2.5.0
+pydantic[email]>=2.5.0
+
+# Database drivers
+psycopg2-binary>=2.9.9
+
+# Testing
+pytest>=7.4.0
+pytest-asyncio>=0.21.0
+
+# Note: strands is only needed for AWS Bedrock deployment
+# Install separately when deploying: pip install strands

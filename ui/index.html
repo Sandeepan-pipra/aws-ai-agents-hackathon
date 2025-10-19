@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Logistics Manager - Three.js</title>
+  <link rel="stylesheet" href="styles/main.css" />
+</head>
+<body>
+  <aside id="sidebar">
+    <div class="panel">
+      <h3>Container Settings</h3>
+      
+      <div class="section">
+        <label>Dimensions (L × H × W mm)</label>
+        <div class="input-group">
+          <input type="number" id="bigX" value="3000" step="100" placeholder="L" />
+          <input type="number" id="bigY" value="1500" step="100" placeholder="H" />
+          <input type="number" id="bigZ" value="1500" step="100" placeholder="W" />
+        </div>
+      </div>
+
+      <div class="section">
+        <label>Position (mm)</label>
+        <div class="input-group">
+          <input type="number" id="bigPosX" value="0" step="100" />
+          <input type="number" id="bigPosY" value="750" step="100" />
+          <input type="number" id="bigPosZ" value="0" step="100" />
+        </div>
+      </div>
+
+      <div class="section">
+        <label>Color</label>
+        <input type="color" id="bigColor" value="#9fbcd4" />
+      </div>
+    </div>
+
+    <div class="panel">
+      <h3>Packages</h3>
+      <div id="innerBoxes"></div>
+      <button id="addBox">Add Package</button>
+    </div>
+
+    <div class="panel actions">
+      <button id="apply" class="primary">Apply Changes</button>
+      <div class="divider"></div>
+      <button id="loadJson">Load Sample</button>
+      <button id="loadFile">Upload JSON</button>
+      <button id="exportJson">Export JSON</button>
+    </div>
+
+    <div class="help">
+      <small>Drag to rotate • Scroll to zoom</small>
+    </div>
+
+    <input type="file" id="fileInput" accept=".json" style="display: none;" />
+  </aside>
+
+  <main id="canvas-container"></main>
+
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>
