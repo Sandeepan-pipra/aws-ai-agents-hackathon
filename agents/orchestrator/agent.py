@@ -16,7 +16,9 @@ from datetime import datetime
 
 # Environment variables
 ORDER_API_URL = os.getenv("ORDER_API_URL", "http://localhost:8000/api/orders")
-TRANSPORT_API_URL = os.getenv("TRANSPORT_API_URL", "http://localhost:3000/api/transport")
+TRANSPORT_API_URL = os.getenv(
+    "TRANSPORT_API_URL", "http://localhost:3000/api/transport"
+)
 ANALYSER_AGENT_ARN = os.getenv(
     "ANALYSER_AGENT_ARN",
     "arn:aws:bedrock-agentcore:us-east-1:YOUR_ACCOUNT_ID:runtime/analyser_agent-xxx",
@@ -30,8 +32,18 @@ SNS_TOPIC_ARN = os.getenv(
     "SNS_TOPIC_ARN", "arn:aws:sns:us-east-1:YOUR_ACCOUNT_ID:logistics-notifications"
 )
 
-# AWS clients
-bedrock_agentcore = boto3.client("bedrock-agentcore", region_name=AWS_REGION)
+# AWS clients with increased timeout
+from botocore.config import Config
+
+config = Config(
+    read_timeout=180,
+    connect_timeout=10,
+    retries={"max_attempts": 2, "mode": "standard"},
+)
+
+bedrock_agentcore = boto3.client(
+    "bedrock-agentcore", region_name=AWS_REGION, config=config
+)
 sns_client = boto3.client("sns", region_name=AWS_REGION)
 
 # Initialize BedrockAgentCoreApp
@@ -82,8 +94,33 @@ def extract_json_from_response(response_data: Any) -> Dict[str, Any]:
     raise ValueError(f"Could not extract JSON from response: {type(response_data)}")
 
 
+def extract_booking_id_from_response(response_data: Any) -> str:
+    """Extract booking ID from transport agent response."""
+    # Strategy 1: Direct booking_id field
+    if isinstance(response_data, dict) and "booking_id" in response_data:
+        return response_data["booking_id"]
+
+    # Strategy 2: Extract from message.content[0].text
+    text = None
+    if isinstance(response_data, dict):
+        if "message" in response_data:
+            msg = response_data["message"]
+            if isinstance(msg, dict) and "content" in msg:
+                if isinstance(msg["content"], list) and len(msg["content"]) > 0:
+                    text = msg["content"][0].get("text", "")
+
+    if text:
+        # Look for UUID pattern (booking ID format)
+        uuid_pattern = r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+        matches = re.findall(uuid_pattern, text, re.IGNORECASE)
+        if matches:
+            return matches[0]  # Return first UUID found
+
+    return "unknown"
+
+
 @tool
-def fetch_pending_orders(limit: int = 50) -> list[Dict[str, Any]]:
+def fetch_pending_orders(limit: int = 10) -> list[Dict[str, Any]]:
     """Fetch pending orders from Order API that need transport processing."""
     import requests
 
@@ -238,9 +275,7 @@ def invoke_analyser_agent(order_id: int) -> Dict[str, Any]:
     )
     session_id = session_id[:64]  # Ensure 64 chars
 
-    payload = {
-        "prompt": f"Analyze order {order_id} and determine if transport is needed. If yes, generate optimal packing layout."
-    }
+    payload = {"prompt": f"Analyze order {order_id}. Generate packing layout."}
 
     response = bedrock_agentcore.invoke_agent_runtime(
         agentRuntimeArn=ANALYSER_AGENT_ARN,
@@ -270,17 +305,7 @@ def invoke_transport_agent(
     if not pickup_date or pickup_date.startswith("2023"):
         pickup_date = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
 
-    prompt = f"""
-    Book transport for order {order_id} with the following requirements:
-    - Weight: {requirements.get('total_weight_kg')} kg
-    - Volume: {requirements.get('total_volume_m3')} m³
-    - Pickup: {requirements.get('pickup_address')}
-    - Delivery: {requirements.get('delivery_address')}
-    - Date: {pickup_date}
-    - Special requirements: {requirements.get('special_requirements', 'None')}
-    
-    Find the most cost-effective vehicle and create the booking.
-    """
+    prompt = f"Book transport for order {order_id}. Weight: {requirements.get('total_weight_kg')}kg, Volume: {requirements.get('total_volume_m3')}m³, Pickup: {requirements.get('pickup_address')}, Delivery: {requirements.get('delivery_address')}, Date: {pickup_date}. Workflow: 1) Check availability, 2) Calculate cost, 3) Select cost-effective vehicle, 4) Book with provided customer_id and requirements."
 
     payload = {"prompt": prompt}
 
@@ -442,7 +467,7 @@ def process_batch_with_transport(batch_id: str, order_ids: list[int]) -> Dict[st
         session_id = session_id[:64]
 
         analyser_payload = {
-            "prompt": f"Generate consolidated packing layout for batch {batch_id} containing orders {order_ids}. Use generate_batch_packing_layout tool with order_ids={order_ids} and batch_id='{batch_id}'. Return the complete tool output."
+            "prompt": f"Generate packing layout for batch {batch_id} with orders {order_ids}. Call generate_batch_packing_layout(order_ids={order_ids}, batch_id='{batch_id}'). Return all 8 fields."
         }
 
         analyser_response = bedrock_agentcore.invoke_agent_runtime(
@@ -520,22 +545,7 @@ def process_batch_with_transport(batch_id: str, order_ids: list[int]) -> Dict[st
         dimensions_mm = requirements["container_id"]
 
         transport_payload = {
-            "prompt": f"""Book transport for BATCH {batch_id} containing orders {order_ids}.
-
-            REQUIRED PARAMETERS:
-            - Order ID: {order_ids[0]}
-            - Customer UUID (Transport API): {transport_customer_uuid}
-            - Weight: {requirements['total_weight_kg']} kg
-            - Volume: {requirements['total_volume_m3']} m³
-            - Dimensions: {dimensions_mm['length']}x{dimensions_mm['width']}x{dimensions_mm['height']} mm
-            - Pickup: {requirements['pickup_address']}
-            - Delivery: {requirements['delivery_address']}
-            - Date: {pickup_date}T09:00:00
-            - S3 Layout Key: {s3_layout_key}
-
-            CRITICAL: Use book_vehicle() with customer_id="{transport_customer_uuid}" (this is the Transport API customer UUID, NOT the order customer ID).
-            CRITICAL: Include s3_layout_key="{s3_layout_key}" in book_vehicle() call for 3D visualization.
-            Call: book_vehicle(order_id={order_ids[0]}, customer_id="{transport_customer_uuid}", vehicle_id=<selected_vehicle>, pickup_address="{requirements['pickup_address']}", delivery_address="{requirements['delivery_address']}", pickup_datetime="{pickup_date}T09:00:00", cargo_details=<cargo>, batch_id="{batch_id}", order_ids={order_ids}, s3_layout_key="{s3_layout_key}")"""
+            "prompt": f"Book vehicle for batch {batch_id}. Customer UUID: {transport_customer_uuid}, Weight: {requirements['total_weight_kg']}kg, Volume: {requirements['total_volume_m3']}m³, Pickup: {requirements['pickup_address']}, Delivery: {requirements['delivery_address']}, Date: {pickup_date}T09:00:00, S3 layout key: {s3_layout_key}. Workflow: 1) Check availability for date {pickup_date} with min weight {requirements['total_weight_kg']}kg and volume {requirements['total_volume_m3']}m³, 2) Calculate cost for suitable vehicles, 3) Select most cost-effective vehicle, 4) Book with order_id={order_ids[0]}, customer_id={transport_customer_uuid}, batch_id={batch_id}, order_ids={order_ids}, s3_layout_key={s3_layout_key}, cargo_details={{weight_kg: {requirements['total_weight_kg']}, dimensions_mm: {dimensions_mm}, description: 'Batch shipment'}}."
         }
 
         transport_response = bedrock_agentcore.invoke_agent_runtime(
@@ -545,16 +555,26 @@ def process_batch_with_transport(batch_id: str, order_ids: list[int]) -> Dict[st
         )
 
         transport_body = transport_response["response"].read().decode("utf-8")
-        transport_result = json.loads(transport_body)
+        transport_raw = json.loads(transport_body)
 
-        # Step 7: Return complete result
+        # Extract booking ID from transport response
+        booking_id = extract_booking_id_from_response(transport_raw)
+
+        # Step 7: Return FLAT dictionary (no nested agent responses)
         return {
             "status": "success",
             "batch_id": batch_id,
             "order_ids": order_ids,
-            "analyser_result": analyser_data,
-            "transport_result": transport_result,
-            "requirements": requirements,
+            "total_weight_kg": analyser_data["total_weight_kg"],
+            "total_volume_m3": analyser_data["total_volume_m3"],
+            "s3_layout_key": s3_layout_key,
+            "total_packages": analyser_data["total_packages"],
+            "container_id": analyser_data["container_id"],
+            "booking_id": booking_id,
+            "customer_id": transport_customer_uuid,
+            "pickup_date": pickup_date,
+            "pickup_address": requirements["pickup_address"],
+            "delivery_address": requirements["delivery_address"],
         }
 
     except Exception as e:
@@ -571,9 +591,7 @@ def process_batch_with_transport(batch_id: str, order_ids: list[int]) -> Dict[st
 
 
 # Create Orchestrator Agent
-model = BedrockModel(
-    model_id="us.amazon.nova-premier-v1:0",
-)
+model = BedrockModel(model_id="us.amazon.nova-premier-v1:0")
 
 agent = Agent(
     model=model,
@@ -592,98 +610,29 @@ agent = Agent(
         send_notification,
         send_batch_notification,
     ],
-    system_prompt="""
-    You are the logistics workflow orchestrator. You coordinate the entire order processing workflow.
-    
-    IMPORTANT: Order status can ONLY be: pending, shipped, delivered, cancelled
-    
-    WORKFLOW FOR SINGLE ORDER:
-    1. Use fetch_order_details(order_id) to get order info (addresses, customer)
-    2. Use invoke_analyser_agent(order_id) to analyze the order
-    3. Check if transport is needed from analysis result
-    4. If transport needed:
-       a. Extract requirements from analysis (weight, volume)
-       b. Extract logistics info from order (pickup=source, delivery=destination)
-       c. Build requirements dict with: total_weight_kg, total_volume_m3, pickup_address, delivery_address
-       d. Use invoke_transport_agent(order_id, requirements) to book vehicle (date will be auto-set to tomorrow)
-       e. Use update_order_status(order_id, 'shipped')
-       f. Use send_notification(order_id, 'transport_booked', details)
-    5. If transport not needed:
-       a. Use update_order_status(order_id, 'delivered')
-       b. Use send_notification(order_id, 'no_transport_needed', details)
-    
-    WORKFLOW FOR BATCH PROCESSING (MULTIPLE ORDERS):
-    1. Use fetch_pending_orders(limit) to get pending orders
-    2. Use group_orders_by_route(orders) to group by (source_warehouse, destination_city)
-       - This automatically splits groups exceeding 10 orders
-    3. IMPORTANT: Select ONLY the batch with the MOST orders (largest batch)
-       - Find the route group with highest order count
-       - Process ONLY that batch
-       - Report other batches as unprocessed
-    4. For the selected largest batch:
-       a. Generate batch_id: "batch-{timestamp}-{route_key}"
-       b. Extract order_ids from group: [order['id'] for order in group]
-       c. Use process_batch_with_transport(batch_id, order_ids)
-          - This composite tool handles entire workflow programmatically
-          - Eliminates LLM from data flow (prevents field truncation)
-          - Automatically: invokes analyser, extracts all fields, fetches customer_id, builds requirements, invokes transport
-          - Returns complete result with all data
-       d. Use update_orders_batch_status(order_ids, 'shipped', batch_id)
-       e. Use send_batch_notification(batch_id, order_ids, 'batch_shipped', details)
-    5. Return summary with processed batch and unprocessed batches info
-    
-    ERROR HANDLING:
-    - If process_batch_with_transport fails, check error details in response
-    - If analyser fails for batch, mark all orders in batch as 'pending'
-    - If transport booking fails for batch, mark all orders as 'pending'
-    - Always send notifications for failures
-    - Never stop processing other batches due to one failure
-    
-    SINGLE ORDER RETURN FORMAT:
-    {
-        "order_id": number,
-        "status": "success" | "failed",
-        "analysis": {analysis results},
-        "booking": {booking results if applicable},
-        "errors": [list of errors if any]
-    }
-    
-    BATCH PROCESSING RETURN FORMAT:
-    {
-        "processed_batch": {
-            "batch_id": string,
-            "route": string,
-            "order_ids": [list],
-            "order_count": number,
-            "status": "success" | "failed",
-            "booking_id": number (if success),
-            "total_weight_kg": number,
-            "total_volume_m3": number,
-            "s3_key": string,
-            "container_id": object,
-            "errors": [list if any]
-        },
-        "unprocessed_batches": [
-            {
-                "route": string,
-                "order_count": number,
-                "order_ids": [list]
-            }
-        ],
-        "summary": {
-            "total_orders": number,
-            "processed_orders": number,
-            "pending_orders": number
-        }
-    }
-    
-    COMPOSITE TOOL BENEFITS:
-    - process_batch_with_transport() eliminates LLM from critical data pipeline
-    - Guarantees all 8 fields from analyser are preserved and passed to transport
-    - Prevents response truncation issues
-    - Ensures customer_id is always fetched and included
-    - More reliable and faster than multi-step LLM workflow
-    """,
+    system_prompt="""You are the logistics orchestrator. Valid order status: pending, shipped, delivered, cancelled.
+
+SINGLE ORDER:
+1. fetch_order_details(order_id)
+2. invoke_analyser_agent(order_id)
+3. Extract weight, volume from analysis
+4. invoke_transport_agent(order_id, requirements) with pickup_address=source, delivery_address=destination
+5. update_order_status(order_id, 'shipped')
+6. send_notification(order_id, 'transport_booked', details)
+7. STOP - do not process more orders
+
+BATCH WORKFLOW:
+1. fetch_pending_orders(limit)
+2. group_orders_by_route(orders) - groups by source/destination
+3. Select largest batch only
+4. Generate batch_id: "batch-{timestamp}-{route_key}"
+5. process_batch_with_transport(batch_id, order_ids)
+6. update_orders_batch_status(order_ids, 'shipped', batch_id)
+7. send_batch_notification(batch_id, order_ids, 'batch_shipped', details)
+8. Report unprocessed batches (do not process them)
+9. STOP - do not process more batches
+
+On failure: mark orders 'pending', send notifications.""",
 )
 
 

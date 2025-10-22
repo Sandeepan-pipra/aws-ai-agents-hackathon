@@ -17,7 +17,9 @@ s3_client = boto3.client("s3")
 
 # Environment variables
 ORDER_API_URL = os.getenv("ORDER_API_URL", "http://localhost:8000/api/orders")
-TRANSPORT_API_URL = os.getenv("TRANSPORT_API_URL", "http://localhost:3000/api/transport")
+TRANSPORT_API_URL = os.getenv(
+    "TRANSPORT_API_URL", "http://localhost:3000/api/transport"
+)
 S3_BUCKET = os.getenv("S3_LAYOUTS_BUCKET", "logistics-packing-layouts")
 
 # Initialize BedrockAgentCoreApp
@@ -49,71 +51,167 @@ class PackingContainer:
     max_weight_kg: float
 
 
-def shelf_pack(
-    items, container, start_z=0.0, start_order=1, max_height=None, prefer_front=False
+def calculate_support_height(x, y, width, length, placements):
+    """Calculate height at which item should be placed based on items below.
+    Requires minimal support (at least 80% overlap) to prevent floating."""
+    max_height = 0.0
+
+    for p in placements:
+        px, py, pz = p["position_mm"]
+        pl, pw, ph = p["dimensions_mm"]
+
+        # Calculate overlap in X-Z plane (length-width)
+        overlap_x_start = max(x, px)
+        overlap_x_end = min(x + length, px + pl)
+        overlap_z_start = max(y, py)  # y is width in our coordinate system
+        overlap_z_end = min(y + width, py + pw)
+
+        # Check if there's any overlap in the horizontal plane
+        if overlap_x_start < overlap_x_end and overlap_z_start < overlap_z_end:
+            overlap_area = (overlap_x_end - overlap_x_start) * (
+                overlap_z_end - overlap_z_start
+            )
+            item_area = length * width
+            support_ratio = overlap_area / item_area
+
+            # Require at least 80% support - prevents floating while allowing some flexibility
+            if support_ratio >= 0.80:
+                max_height = max(max_height, pz + ph)
+
+    return max_height
+
+
+def check_collision(x, y, z, length, width, height, all_placements):
+    """Check if item would collide with existing items."""
+    for p in all_placements:
+        px, py, pz = p["position_mm"]
+        pl, pw, ph = p["dimensions_mm"]
+
+        # Check overlap in all 3 dimensions
+        overlap_x = not (x >= px + pl or x + length <= px)
+        overlap_y = not (y >= py + pw or y + width <= py)
+        overlap_z = not (z >= pz + ph or z + height <= pz)
+
+        if overlap_x and overlap_y and overlap_z:
+            return True
+    return False
+
+
+def find_best_position(
+    item, container, all_placements, start_z, max_height, prefer_front
 ):
-    """3D shelf packing with explicit position tracking to prevent overlaps."""
+    """Find the best position: only stack with proper support, otherwise use floor."""
+    candidates = []
+
+    # Try positions in a grid pattern
+    step_x = min(200, item.length_mm)
+    step_y = min(200, item.width_mm)
+
+    for x in range(0, int(container.length_mm - item.length_mm + 1), int(step_x)):
+        for y in range(0, int(container.width_mm - item.width_mm + 1), int(step_y)):
+            # Calculate support height at this position
+            support_z = calculate_support_height(
+                x, y, item.width_mm, item.length_mm, all_placements
+            )
+
+            # Only use support height if it's actually supported, otherwise use floor
+            if support_z > 0.0:
+                final_z = support_z  # Has proper support
+                is_stacked = True
+            else:
+                final_z = 0.0  # No support, go to floor
+                is_stacked = False
+
+            # Check height constraint
+            if final_z + item.height_mm > max_height:
+                continue
+
+            # Check for collisions
+            if check_collision(
+                x,
+                y,
+                final_z,
+                item.length_mm,
+                item.width_mm,
+                item.height_mm,
+                all_placements,
+            ):
+                continue
+
+            # Scoring: prefer stacking with proper support
+            stacking_bonus = 100 if is_stacked else 0
+
+            # Apply fragile preference
+            fragile_penalty = 0
+            if prefer_front and x > container.length_mm * 0.6:
+                fragile_penalty = 50
+
+            # Final score: higher is better
+            score = stacking_bonus - fragile_penalty - final_z * 0.001
+
+            candidates.append((score, x, y, final_z))
+
+    # Return best candidate (highest score)
+    if candidates:
+        candidates.sort(reverse=True)
+        _, x, y, z = candidates[0]
+        return (x, y, z)
+
+    return None
+
+
+def shelf_pack(
+    items,
+    container,
+    start_z=0.0,
+    start_order=1,
+    max_height=None,
+    prefer_front=False,
+    existing_placements=None,
+):
+    """3D packing that prioritizes stacking over floor coverage."""
     placements = []
     leftover = []
     order = start_order
     max_height = max_height or container.height_mm
-
-    # Track current position explicitly
-    current_x = 0.0
-    current_y = 0.0
-    current_z = start_z
-    current_row_height = 0.0
-    current_layer_height = 0.0
+    all_placements = list(existing_placements or [])
 
     for item in items:
-        # Check if item fits in current row
-        if current_x + item.length_mm > container.length_mm:
-            # Move to next row
-            current_x = 0.0
-            current_y += current_row_height
-            current_row_height = 0.0
+        # Find best position for this item
+        pos = find_best_position(
+            item, container, all_placements, start_z, max_height, prefer_front
+        )
 
-        # Check if item fits in current layer
-        if current_y + item.width_mm > container.width_mm:
-            # Move to next layer
-            current_x = 0.0
-            current_y = 0.0
-            current_z += current_layer_height
-            current_row_height = 0.0
-            current_layer_height = 0.0
-
-        # Check height constraint
-        if current_z + item.height_mm > max_height:
+        if pos is None:
             leftover.append(item)
             continue
 
-        # Place item at current position
-        final_x = (
-            current_x if not prefer_front else min(current_x, container.length_mm * 0.2)
-        )
+        x, y, z = pos
 
-        placements.append(
-            {
-                "item_name": item.name,
-                "dimensions_mm": [item.length_mm, item.width_mm, item.height_mm],
-                "position_mm": [final_x, current_y, current_z],
-                "placement_order": order,
-                "fragile": item.fragile,
-            }
-        )
-
-        # Update position for next item
-        current_x += item.length_mm
-        current_row_height = max(current_row_height, item.width_mm)
-        current_layer_height = max(current_layer_height, item.height_mm)
+        # Place item
+        placement = {
+            "item_name": item.name,
+            "dimensions_mm": [item.length_mm, item.width_mm, item.height_mm],
+            "position_mm": [x, y, z],
+            "placement_order": order,
+            "fragile": item.fragile,
+        }
+        placements.append(placement)
+        all_placements.append(placement)
         order += 1
 
-    used_height = current_z + current_layer_height
+    # Calculate actual used height
+    used_height = start_z
+    if placements:
+        used_height = max(
+            p["position_mm"][2] + p["dimensions_mm"][2] for p in placements
+        )
+
     return placements, used_height, leftover
 
 
 def pack_items_in_container(container, items):
-    """Pack items into a single container (fragile & weight aware)."""
+    """Pack items into a single container with gravity support."""
     fragile = [i for i in items if i.fragile]
     non_fragile = [i for i in items if not i.fragile]
 
@@ -121,7 +219,6 @@ def pack_items_in_container(container, items):
     fragile.sort(key=lambda i: i.weight_kg, reverse=True)
 
     placements = []
-    used_height = 0.0
     leftover_total = []
     placement_order = 1
 
@@ -132,28 +229,48 @@ def pack_items_in_container(container, items):
         heavy = [i for i in non_fragile if i.weight_kg >= median_weight]
         medium = [i for i in non_fragile if i.weight_kg < median_weight]
 
+    used_height = 0.0
+
+    # Pack heavy items at bottom
     if heavy:
         heavy_res, used_height, leftover_h = shelf_pack(
-            heavy, container, 0.0, placement_order, None, False
+            heavy, container, used_height, placement_order, None, False, placements
         )
         placements.extend(heavy_res)
         leftover_total.extend(leftover_h)
         placement_order += len(heavy_res)
 
+    # Pack medium items on top of heavy items
     if medium:
         mid_res, used_height, leftover_m = shelf_pack(
-            medium, container, used_height, placement_order, None, False
+            medium, container, used_height, placement_order, None, False, placements
         )
         placements.extend(mid_res)
         leftover_total.extend(leftover_m)
         placement_order += len(mid_res)
 
+    # Pack fragile items on top (door preference relaxed for space efficiency)
     if fragile:
         f_res, _, leftover_f = shelf_pack(
-            fragile, container, used_height, placement_order, None, True
+            fragile, container, used_height, placement_order, None, True, placements
         )
         placements.extend(f_res)
         leftover_total.extend(leftover_f)
+
+        # If fragile items couldn't fit due to door preference, try again without preference
+        if leftover_f:
+            f_res2, _, leftover_f2 = shelf_pack(
+                leftover_f,
+                container,
+                used_height,
+                placement_order + len(f_res),
+                None,
+                False,
+                placements + f_res,
+            )
+            placements.extend(f_res2)
+            leftover_total = [item for item in leftover_total if item not in f_res2]
+            leftover_total.extend(leftover_f2)
 
     return placements, leftover_total
 
@@ -621,14 +738,16 @@ def generate_batch_packing_layout(
         / 1_000_000_000
     )
 
-    # 8. Build order-item mapping
+    # 8. Build order-item mapping (count only, not full list)
     order_item_mapping = {}
     for pkg in ui_layout["packages"]:
         if "order_id" in pkg:
             oid = str(pkg["order_id"])
             if oid not in order_item_mapping:
-                order_item_mapping[oid] = []
-            order_item_mapping[oid].append(pkg["id"])
+                order_item_mapping[oid] = {"item_count": 0, "sample_items": []}
+            order_item_mapping[oid]["item_count"] += 1
+            if len(order_item_mapping[oid]["sample_items"]) < 3:
+                order_item_mapping[oid]["sample_items"].append(pkg["id"])
 
     return {
         "batch_id": batch_id,
@@ -735,50 +854,38 @@ agent = Agent(
         generate_packing_layout,
         generate_batch_packing_layout,
     ],
-    system_prompt="""
-    You are a logistics load planning expert. Your workflow:
-    
-    BATCH ORDER WORKFLOW:
-    1. Use generate_batch_packing_layout(order_ids, batch_id) for multiple orders
-    This will:
-       - Fetch all order details automatically
-       - Pack items from all orders together (mixed packing for efficiency)
-       - Tag each item with its order_id for traceability
-       - Generate single consolidated layout
-       - Save to S3 with batch_id
-    2. CRITICAL: After calling generate_batch_packing_layout, return its EXACT output with ALL 8 fields:
-       - batch_id (string)
-       - order_ids (array)
-       - total_weight_kg (number)
-       - total_volume_m3 (number)
-       - s3_key (string)
-       - total_packages (number)
-       - container_id (object)
-       - order_item_mapping (object)
-       - DO NOT extract only weight and volume
-       - DO NOT add explanatory text
-       - DO NOT summarize or simplify the response
-    
-    Consider constraints:
-    - Fragile items must be on top and near door
-    - Heavy items at bottom for stability
-    - Refrigerated items together
-    - Efficient space utilization
-    - Max 10 orders per batch
-    
-    RETURN FORMAT (MUST INCLUDE ALL 8 FIELDS):
-    This agent should return the response in following format:
-    {
-        "batch_id": string,
-        "order_ids": [list of order IDs],
-        "total_weight_kg": number,
-        "total_volume_m3": number,
-        "s3_key": string,
-        "total_packages": number,
-        "container_id": {length, width, height},
-        "order_item_mapping": {order_id: [item_ids]}
-    }
-    """,
+    system_prompt="""You are a logistics load planning expert.
+
+BATCH WORKFLOW:
+1. Use generate_batch_packing_layout(order_ids, batch_id) for multiple orders
+   - Fetches order details automatically
+   - Packs items from all orders together
+   - Tags items with order_id for traceability
+   - Generates consolidated layout
+   - Saves to S3 with batch_id
+
+2. CRITICAL: Return EXACT output with ALL 8 fields:
+   - batch_id (string)
+   - order_ids (array)
+   - total_weight_kg (number)
+   - total_volume_m3 (number)
+   - s3_key (string)
+   - total_packages (number)
+   - container_id (object)
+   - order_item_mapping (object with item_count and sample_items)
+   - DO NOT extract only weight/volume
+   - DO NOT add explanatory text
+   - DO NOT summarize
+
+Constraints:
+- Fragile items on top, near door
+- Heavy items at bottom
+- Refrigerated items together
+- Efficient space utilization
+- Max 10 orders per batch
+
+RETURN FORMAT (ALL 8 FIELDS):
+{"batch_id": str, "order_ids": [], "total_weight_kg": num, "total_volume_m3": num, "s3_key": str, "total_packages": num, "container_id": {length, width, height}, "order_item_mapping": {order_id: {item_count, sample_items}}}""",
 )
 
 

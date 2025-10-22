@@ -49,12 +49,12 @@ const PRIORITY_DISTRIBUTION = [
   { priority: 5, weight: 5 },    // 5% bulk
 ];
 
-// Order size distribution
+// Order size distribution - increased to better fill containers
 const ORDER_SIZE_DISTRIBUTION = [
-  { min: 1, max: 2, weight: 40 },    // 40% small
-  { min: 3, max: 5, weight: 40 },    // 40% medium
-  { min: 6, max: 10, weight: 15 },   // 15% large
-  { min: 11, max: 20, weight: 5 },   // 5% bulk
+  { min: 3, max: 6, weight: 30 },    // 30% small
+  { min: 7, max: 12, weight: 40 },   // 40% medium
+  { min: 13, max: 20, weight: 20 },  // 20% large
+  { min: 21, max: 35, weight: 10 },  // 10% bulk
 ];
 
 /**
@@ -210,7 +210,7 @@ export function generateOrderItems(products, orderSize) {
 
   return selectedProducts.map((product) => ({
     product_id: product.id,
-    quantity: Math.floor(Math.random() * 3) + 1, // 1-3 quantity per item
+    quantity: Math.floor(Math.random() * 5) + 2, // 2-6 quantity per item (increased)
   }));
 }
 

@@ -82,8 +82,18 @@ export default function OrderServiceControl() {
         <Settings className="w-5 h-5" />
         Order Service Control
       </h2>
+      <div className="flex justify-center gap-3">
+        <button
+          onClick={ generateRandomOrder }
+          className="btn-success flex items-center gap-2 w-full justify-center"
+          disabled={ products.length === 0 || customers.length === 0 }
+        >
+          <Play className="w-4 h-4" />
+          Generate Order
+        </button>
+      </div>
 
-      <div className="space-y-4">
+      {/* <div className="space-y-4">
         <div>
           <label className="block text-sm font-medium text-gray-700 mb-2">
             Orders per Second
@@ -93,32 +103,33 @@ export default function OrderServiceControl() {
             min="0.1"
             max="10"
             step="0.1"
-            value={ordersPerSecond}
-            onChange={(e) => setOrdersPerSecond(parseFloat(e.target.value))}
-            disabled={isRunning}
+            value={ ordersPerSecond }
+            onChange={ (e) => setOrdersPerSecond(parseFloat(e.target.value)) }
+            disabled={ isRunning }
             className="input w-full"
           />
         </div>
 
+
         <div className="flex justify-center gap-3">
-          {!isRunning ? (
+          { !isRunning ? (
             <button
-              onClick={startOrderGeneration}
+              onClick={ startOrderGeneration }
               className="btn-success flex items-center gap-2"
-              disabled={products.length === 0 || customers.length === 0}
+              disabled={ products.length === 0 || customers.length === 0 }
             >
               <Play className="w-4 h-4" />
               Start Generation
             </button>
           ) : (
             <button
-              onClick={stopOrderGeneration}
+              onClick={ stopOrderGeneration }
               className="btn-danger flex items-center gap-2"
             >
               <Pause className="w-4 h-4" />
               Stop Generation
             </button>
-          )}
+          ) }
         </div>
 
         <div className="pt-4 border-t border-gray-200">
@@ -132,19 +143,19 @@ export default function OrderServiceControl() {
                     : 'status-indicator-inactive'
                 }
               />
-              {isRunning ? 'Running' : 'Stopped'}
+              { isRunning ? 'Running' : 'Stopped' }
             </span>
           </div>
           <div className="flex items-center justify-between mt-2">
             <span className="text-sm text-gray-600">Orders Created:</span>
-            <span className="font-semibold">{ordersCreated}</span>
+            <span className="font-semibold">{ ordersCreated }</span>
           </div>
           <div className="flex items-center justify-between mt-2">
             <span className="text-sm text-gray-600">Rate:</span>
-            <span className="font-semibold">{ordersPerSecond} /sec</span>
+            <span className="font-semibold">{ ordersPerSecond } /sec</span>
           </div>
         </div>
-      </div>
+      </div> */}
     </div>
   );
 }
